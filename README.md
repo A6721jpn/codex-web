@@ -30,4 +30,6 @@ The browser only talks to the codex-web server. The server owns authentication, 
 
 This repository is in the design/setup phase. The first implementation milestone is a minimal chat-centered remote client.
 
+The current design is documented in [docs/superpowers/specs/2026-05-11-codex-web-design.md](docs/superpowers/specs/2026-05-11-codex-web-design.md).
+
 See [AGENTS.md](AGENTS.md) for project goals and development rules.
