@@ -1,0 +1,32 @@
+{
+  "generatedAt": "2026-05-11T08:08:23.379Z",
+  "codexBin": "codex",
+  "commands": [
+    {
+      "args": [
+        "app-server",
+        "generate-ts",
+        "--experimental",
+        "--out",
+        "<USER_HOME>\\Documents\\New project\\docs\\m0\\generated\\app-server-protocol\\ts"
+      ],
+      "exitCode": 0,
+      "stderrTail": "",
+      "stdoutTail": ""
+    },
+    {
+      "args": [
+        "app-server",
+        "generate-json-schema",
+        "--experimental",
+        "--out",
+        "<USER_HOME>\\Documents\\New project\\docs\\m0\\generated\\app-server-protocol\\json-schema"
+      ],
+      "exitCode": 0,
+      "stderrTail": "",
+      "stdoutTail": ""
+    }
+  ],
+  "schemaHash": "6277f291a7b47ae5a981ca8d29a25daa6e92db94bc6cf6e94429a132471b0801",
+  "tsHash": "46f64ff8cbbf3f33ff8fd397aa835a9f7c9a8b54a824f6d8b9253e68033f4705"
+}

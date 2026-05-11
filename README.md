@@ -32,4 +32,6 @@ This repository is in the design/setup phase. The first implementation milestone
 
 The current design is documented in [docs/superpowers/specs/2026-05-11-codex-web-design.md](docs/superpowers/specs/2026-05-11-codex-web-design.md).
 
+M0 protocol and Windows feasibility results are documented in [docs/m0/protocol-and-windows-feasibility.md](docs/m0/protocol-and-windows-feasibility.md).
+
 See [AGENTS.md](AGENTS.md) for project goals and development rules.
