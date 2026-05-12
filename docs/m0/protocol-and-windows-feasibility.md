@@ -101,6 +101,8 @@ M1 should keep this stance: SQLite stores metadata and audit rows, not conversat
 
 Go for M1 with constraints.
 
+Historical note: this section records the risk posture at M0. Current milestone status supersedes any "M1 must" wording below; process-tree containment is still deferred and remains required before broader long-running app-server supervision or emergency-stop work.
+
 The stdio protocol path is feasible: Node can start the real app-server, initialize it, call the required thread/turn methods, receive lifecycle notifications, interrupt an active turn, resume a thread, and generate protocol snapshots.
 
 The main risks to carry into M1 are Windows-specific:
