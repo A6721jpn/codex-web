@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   AppServerClient,
   APP_SERVER_ALLOWED_METHODS,
+  codexAppServerSpawnOptions,
   type AppServerProcess,
 } from "../../src/server/app-server-client.ts";
 
@@ -152,4 +153,13 @@ test("AppServerClient caps and redacts stdout and stderr diagnostics", async () 
   assert(!JSON.stringify(diagnostics).includes("private body"));
   assert(!JSON.stringify(diagnostics).includes("C:\\Users\\aokuni"));
   await client.close();
+});
+
+test("codex app-server spawn options can launch Windows command shims", () => {
+  const cmdOptions = codexAppServerSpawnOptions("C:\\Users\\me\\AppData\\Roaming\\npm\\codex.cmd");
+  assert.equal(cmdOptions.shell, process.platform === "win32");
+  assert.equal(cmdOptions.windowsHide, true);
+
+  const exeOptions = codexAppServerSpawnOptions("C:\\Tools\\codex.exe");
+  assert.equal(exeOptions.shell, false);
 });

@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { homedir } from "node:os";
 import type { Readable, Writable } from "node:stream";
@@ -250,9 +250,15 @@ function splitLines(owner: AppServerClient, chunk: string): string[] {
 }
 
 function spawnCodexAppServer(codexBin: string): ChildProcessWithoutNullStreams {
-  return spawn(codexBin, ["app-server", "--listen", "stdio://"], {
+  return spawn(codexBin, ["app-server", "--listen", "stdio://"], codexAppServerSpawnOptions(codexBin));
+}
+
+export function codexAppServerSpawnOptions(codexBin: string): SpawnOptionsWithoutStdio {
+  return {
+    shell: process.platform === "win32" && /\.(?:bat|cmd)$/i.test(codexBin),
     stdio: ["pipe", "pipe", "pipe"],
-  });
+    windowsHide: true,
+  };
 }
 
 function appendCapped(existing: string, next: string, limit: number): string {
