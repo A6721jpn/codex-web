@@ -502,6 +502,7 @@ async function handleUpgrade(input: {
   input.sockets.set(lease.connectionId, input.socket);
   input.socket.on("close", () => input.sockets.delete(lease.connectionId));
   input.socket.on("end", () => input.sockets.delete(lease.connectionId));
+  input.socket.on("error", () => input.sockets.delete(lease.connectionId));
   input.socket.on("data", (chunk: Buffer) => {
     for (const message of parseWebSocketMessages(chunk)) {
       if (message.type === "connection.heartbeat") {

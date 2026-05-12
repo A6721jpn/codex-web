@@ -231,6 +231,46 @@ test("websocket heartbeat messages receive an acknowledgement", async () => {
   });
 });
 
+test("websocket socket errors are contained and do not crash the server", async () => {
+  await withTempDir(async (dir) => {
+    const app = await createCodexWebApp({
+      appServer: new FakeAppServerRuntime(),
+      env: {
+        CODEX_WEB_DB_PATH: join(dir, "api.sqlite"),
+        CODEX_WEB_PUBLIC_ORIGIN: "http://localhost:8787",
+        CODEX_WEB_SESSION_SECRET: "s".repeat(32),
+      },
+    });
+    try {
+      await setupPassword(app);
+      const session = await login(app);
+      const ticketResponse = await app.fetch(
+        new Request("http://localhost:8787/api/ws-ticket", {
+          headers: { cookie: session.cookie, origin: "http://localhost:8787", "x-csrf-token": session.csrfToken },
+          method: "POST",
+        }),
+      );
+      const ticket = ((await ticketResponse.json()) as { ticket: string }).ticket;
+      const socket = new MemorySocket();
+      await app.handleUpgrade(
+        new Request(`http://localhost:8787/ws?ticket=${encodeURIComponent(ticket)}`, {
+          headers: {
+            cookie: session.cookie,
+            host: "localhost:8787",
+            origin: "http://localhost:8787",
+            "sec-websocket-key": websocketKey(),
+          },
+        }),
+        socket,
+      );
+
+      assert.doesNotThrow(() => socket.emit("error", Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" })));
+    } finally {
+      await app.close();
+    }
+  });
+});
+
 test("different device reconnect sees busy state instead of privileged data", async () => {
   await withTempDir(async (dir) => {
     const app = await createCodexWebApp({
