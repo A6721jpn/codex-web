@@ -7,6 +7,7 @@ export type ThreadStatus = "active" | "archived" | "deleted" | "ephemeral" | "mi
 
 export type ThreadIndexEntry = {
   id: string;
+  lastOpenedAt?: number;
   sourceKind: ThreadSourceKind;
   status: ThreadStatus;
   title?: string;
@@ -93,25 +94,52 @@ export class ThreadIndexStore {
     }
   }
 
-  list(input: { cursor?: string; limit: number }): ThreadIndexListResult {
+  list(input: { cursor?: string; limit: number; search?: string }): ThreadIndexListResult {
     const limit = Math.max(1, Math.min(input.limit, 100));
     const cursor = input.cursor ? decodeCursor(input.cursor) : undefined;
+    const search = input.search?.trim();
+    const searchPattern = search ? `%${escapeLike(search)}%` : undefined;
     const rows = (
-      cursor
+      cursor && searchPattern
         ? this.#db
             .prepare(
-              `SELECT id, source_kind, status, title, workspace_id, workspace_path, updated_at
-               FROM thread_index
-               WHERE updated_at < ? OR (updated_at = ? AND id < ?)
-               ORDER BY updated_at DESC, id DESC
+              `SELECT t.id, t.source_kind, t.status, t.title, t.workspace_id, t.workspace_path, t.updated_at, u.last_opened_at
+               FROM thread_index t
+               LEFT JOIN ui_thread_state u ON u.thread_id = t.id
+               WHERE (t.updated_at < ? OR (t.updated_at = ? AND t.id < ?))
+                 AND (t.id LIKE ? ESCAPE '\\' OR t.title LIKE ? ESCAPE '\\' OR t.workspace_path LIKE ? ESCAPE '\\')
+               ORDER BY t.updated_at DESC, t.id DESC
+               LIMIT ?`,
+            )
+            .all(cursor.updatedAt, cursor.updatedAt, cursor.id, searchPattern, searchPattern, searchPattern, limit + 1)
+        : cursor
+        ? this.#db
+            .prepare(
+              `SELECT t.id, t.source_kind, t.status, t.title, t.workspace_id, t.workspace_path, t.updated_at, u.last_opened_at
+               FROM thread_index t
+               LEFT JOIN ui_thread_state u ON u.thread_id = t.id
+               WHERE t.updated_at < ? OR (t.updated_at = ? AND t.id < ?)
+               ORDER BY t.updated_at DESC, t.id DESC
                LIMIT ?`,
             )
             .all(cursor.updatedAt, cursor.updatedAt, cursor.id, limit + 1)
+        : searchPattern
+          ? this.#db
+              .prepare(
+                `SELECT t.id, t.source_kind, t.status, t.title, t.workspace_id, t.workspace_path, t.updated_at, u.last_opened_at
+                 FROM thread_index t
+                 LEFT JOIN ui_thread_state u ON u.thread_id = t.id
+                 WHERE t.id LIKE ? ESCAPE '\\' OR t.title LIKE ? ESCAPE '\\' OR t.workspace_path LIKE ? ESCAPE '\\'
+                 ORDER BY t.updated_at DESC, t.id DESC
+                 LIMIT ?`,
+              )
+              .all(searchPattern, searchPattern, searchPattern, limit + 1)
         : this.#db
             .prepare(
-              `SELECT id, source_kind, status, title, workspace_id, workspace_path, updated_at
-               FROM thread_index
-               ORDER BY updated_at DESC, id DESC
+              `SELECT t.id, t.source_kind, t.status, t.title, t.workspace_id, t.workspace_path, t.updated_at, u.last_opened_at
+               FROM thread_index t
+               LEFT JOIN ui_thread_state u ON u.thread_id = t.id
+               ORDER BY t.updated_at DESC, t.id DESC
                LIMIT ?`,
             )
             .all(limit + 1)
@@ -188,6 +216,7 @@ export class FakeThreadListAdapter implements ThreadListAdapter {
 
 type ThreadIndexRow = {
   id: string;
+  last_opened_at: number | null;
   source_kind: ThreadSourceKind;
   status: ThreadStatus;
   title: string | null;
@@ -199,6 +228,7 @@ type ThreadIndexRow = {
 function fromRow(row: ThreadIndexRow): ThreadIndexEntry {
   return {
     id: row.id,
+    lastOpenedAt: row.last_opened_at ?? undefined,
     sourceKind: row.source_kind,
     status: row.status,
     title: row.title ?? undefined,
@@ -206,6 +236,10 @@ function fromRow(row: ThreadIndexRow): ThreadIndexEntry {
     workspaceId: row.workspace_id ?? undefined,
     workspacePath: row.workspace_path ?? undefined,
   };
+}
+
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (match) => `\\${match}`);
 }
 
 function encodeCursor(cursor: { id: string; updatedAt: number }): string {

@@ -102,6 +102,10 @@ export class ChatRuntime {
     return this.#requireApprovals().listForLease(lease);
   }
 
+  reassignApprovals(from: ApprovalLeaseRef, to: ApprovalLeaseRef): number {
+    return this.#requireApprovals().reassignLease(from, to);
+  }
+
   async decideApproval(
     approvalId: string,
     lease: ApprovalLeaseRef,
@@ -119,34 +123,37 @@ export class ChatRuntime {
   }
 
   async refreshThreads(options: { pageSize?: number } = {}): Promise<{ upserted: number }> {
-    await this.#ensureReady();
-    return await syncThreadIndex(
-      this.#threads,
-      {
-        listThreads: async (request) => {
-          const page = (await this.#appServer.threadList({
-            cursor: request.cursor,
-            limit: request.pageSize,
-            sourceKinds: [...request.sourceKinds],
-          })) as AppServerThreadListPage;
-          return {
-            data: (page.data ?? []).map(mapThreadMetadata),
-            nextCursor: page.nextCursor ?? undefined,
-          };
+    return await this.#safeRead(async () => {
+      return await syncThreadIndex(
+        this.#threads,
+        {
+          listThreads: async (request) => {
+            const page = (await this.#appServer.threadList({
+              cursor: request.cursor,
+              limit: request.pageSize,
+              sourceKinds: [...request.sourceKinds],
+            })) as AppServerThreadListPage;
+            return {
+              data: (page.data ?? []).map(mapThreadMetadata),
+              nextCursor: page.nextCursor ?? undefined,
+            };
+          },
         },
-      },
-      { pageSize: options.pageSize ?? 50 },
-    );
+        { pageSize: options.pageSize ?? 50 },
+      );
+    });
   }
 
   async readThread(input: { includeTurns?: boolean; threadId: string }): Promise<unknown> {
-    await this.#ensureReady();
-    return await this.#appServer.threadRead({ includeTurns: input.includeTurns ?? false, threadId: input.threadId });
+    return await this.#safeRead(async () => {
+      return await this.#appServer.threadRead({ includeTurns: input.includeTurns ?? false, threadId: input.threadId });
+    });
   }
 
   async listTurns(input: { cursor?: string; limit?: number; threadId: string }): Promise<unknown> {
-    await this.#ensureReady();
-    return await this.#appServer.threadTurnsList(input);
+    return await this.#safeRead(async () => {
+      return await this.#appServer.threadTurnsList(input);
+    });
   }
 
   async startThread(input: SemanticWorkspaceInput & { prompt?: string }): Promise<{ thread: AppServerThread; turn?: { id?: string } }> {
@@ -208,6 +215,19 @@ export class ChatRuntime {
 
   async #ensureReady(): Promise<void> {
     await this.#appServer.start?.();
+  }
+
+  async #safeRead<T>(operation: () => Promise<T>): Promise<T> {
+    await this.#ensureReady();
+    try {
+      return await operation();
+    } catch (error) {
+      if (!isAppServerUnavailable(error)) {
+        throw error;
+      }
+      await this.#ensureReady();
+      return await operation();
+    }
   }
 
   #requireWorkspace(workspaceId: number) {
@@ -349,4 +369,8 @@ function mapSourceKind(source: unknown): ThreadSourceKind {
 
 function isThreadStartResult(value: unknown): value is { thread: AppServerThread } {
   return Boolean(value && typeof value === "object" && "thread" in value && (value as { thread?: unknown }).thread);
+}
+
+function isAppServerUnavailable(error: unknown): boolean {
+  return error instanceof Error && /app-server (unavailable|failed|exited)|app-server exited/i.test(error.message);
 }

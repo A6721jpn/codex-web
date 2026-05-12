@@ -187,6 +187,11 @@ export class WorkspaceStore {
     return row ? this.#toRecord(row) : undefined;
   }
 
+  markOpened(id: number): void {
+    const now = this.#now();
+    this.#db.prepare("UPDATE workspaces SET last_opened_at = ?, updated_at = ? WHERE id = ?").run(now, now, id);
+  }
+
   #toRecord(row: WorkspaceRow): WorkspaceRecord {
     return {
       canonicalPath: row.canonical_path,

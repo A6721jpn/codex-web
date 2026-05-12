@@ -16,6 +16,7 @@ import { ConnectionLeaseManager } from "./connection-lease.ts";
 import { getConfig, type CodexWebConfig } from "./config.ts";
 import { applyMigrations, openDatabase, type CodexWebDatabase } from "./db.ts";
 import { requestHeaders, validateCsrf } from "./security.ts";
+import { securityHeaders } from "./static.ts";
 import { ThreadIndexStore } from "./thread-index.ts";
 import { WorkspaceStore } from "./workspace.ts";
 import { WebSocketTicketStore } from "./ws-ticket.ts";
@@ -152,6 +153,22 @@ async function routeRequest(input: {
     return json({ ticket: input.tickets.issue(session.sessionHash) });
   }
 
+  if (input.request.method === "GET" && url.pathname === "/api/connection/status") {
+    return json(connectionStatus(input.db, session.deviceSessionId));
+  }
+
+  if (input.request.method === "POST" && url.pathname === "/api/connection/reconnect") {
+    const previousLease = currentActiveLease(input.db);
+    const lease = input.leases.acquire(session.deviceSessionId, "browser", input.request.headers.get("user-agent") ?? "");
+    if (lease.state === "busy") {
+      return json(lease, 409);
+    }
+    if (previousLease && (previousLease.connectionId !== lease.connectionId || previousLease.epoch !== lease.epoch)) {
+      input.runtime.reassignApprovals(previousLease, { connectionId: lease.connectionId, epoch: lease.epoch });
+    }
+    return json(lease);
+  }
+
   if (input.request.method === "POST" && url.pathname === "/api/connection/takeover") {
     const body = (await input.request.json()) as { password?: string };
     const lease = await input.leases.takeover({
@@ -171,6 +188,31 @@ async function routeRequest(input: {
     return json(input.workspaces.list());
   }
 
+  if (input.request.method === "GET" && url.pathname === "/api/state") {
+    const lease = readActiveLease(input.leases, input.request);
+    if (!lease) {
+      return json({ error: "Active connection required" }, 403);
+    }
+    try {
+      await input.runtime.refreshThreads({ pageSize: 50 });
+    } catch (error) {
+      return json(
+        {
+          error: "App-server unavailable",
+          runtimeError: runtimeErrorMetadata(error),
+        },
+        503,
+      );
+    }
+    return json({
+      activeThreadId: settingValue(input.db, "ui.active_thread_id"),
+      activeWorkspaceId: numberSettingValue(input.db, "ui.active_workspace_id"),
+      approvals: input.runtime.listApprovals(lease).map(publicApproval),
+      threads: input.threads.list({ limit: 50 }),
+      workspaces: input.workspaces.list(),
+    });
+  }
+
   if (input.request.method === "POST" && url.pathname === "/api/workspaces/open") {
     if (!canUseActiveLease(input.leases, input.request)) {
       return json({ error: "Active connection required" }, 403);
@@ -183,6 +225,31 @@ async function routeRequest(input: {
     }
   }
 
+  if (input.request.method === "POST" && url.pathname === "/api/ui/active") {
+    if (!canUseActiveLease(input.leases, input.request)) {
+      return json({ error: "Active connection required" }, 403);
+    }
+    const body = await readJsonBody<{ threadId?: unknown; workspaceId?: unknown }>(input.request);
+    const workspaceId = integerBodyValue(body.workspaceId);
+    if (workspaceId !== undefined && !input.workspaces.getById(workspaceId)) {
+      return json({ error: "Workspace not found" }, 400);
+    }
+    if (workspaceId !== undefined) {
+      setSettingValue(input.db, "ui.active_workspace_id", String(workspaceId));
+      input.workspaces.markOpened(workspaceId);
+    }
+    if (typeof body.threadId === "string" && body.threadId) {
+      setSettingValue(input.db, "ui.active_thread_id", body.threadId);
+      const current = input.threads.getUiState(body.threadId) ?? { collapsed: false, pinned: false };
+      try {
+        input.threads.setUiState(body.threadId, { ...current, lastOpenedAt: Date.now() });
+      } catch {
+        // The active thread id can arrive before the refreshed app-server index contains it.
+      }
+    }
+    return json({ ok: true });
+  }
+
   if (input.request.method === "GET" && url.pathname === "/api/threads") {
     if (!canUseActiveLease(input.leases, input.request)) {
       return json({ error: "Active connection required" }, 403);
@@ -190,7 +257,7 @@ async function routeRequest(input: {
     const limit = Number(url.searchParams.get("limit") ?? "50");
     const cursor = url.searchParams.get("cursor") ?? undefined;
     try {
-      return json(input.threads.list({ cursor, limit: Number.isFinite(limit) ? limit : 50 }));
+      return json(input.threads.list({ cursor, limit: Number.isFinite(limit) ? limit : 50, search: url.searchParams.get("search") ?? undefined }));
     } catch {
       return json({ error: "Invalid cursor" }, 400);
     }
@@ -328,6 +395,18 @@ async function routeRequest(input: {
     }
   }
 
+  const threadUnsubscribeMatch = url.pathname.match(/^\/api\/threads\/([^/]+)\/unsubscribe$/);
+  if (threadUnsubscribeMatch && input.request.method === "POST") {
+    if (!canUseActiveLease(input.leases, input.request)) {
+      return json({ error: "Active connection required" }, 403);
+    }
+    try {
+      return json(await input.runtime.unsubscribeThread({ threadId: decodeURIComponent(threadUnsubscribeMatch[1]!) }));
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : "Thread unsubscribe failed" }, 503);
+    }
+  }
+
   const threadMatch = url.pathname.match(/^\/api\/threads\/([^/]+)$/);
   if (threadMatch && input.request.method === "GET") {
     if (!canUseActiveLease(input.leases, input.request)) {
@@ -428,6 +507,7 @@ function json(body: unknown, status = 200, headers: Record<string, string> = {})
     headers: {
       "cache-control": "no-store",
       "content-type": "application/json; charset=utf-8",
+      ...securityHeaders(),
       ...headers,
     },
     status,
@@ -452,6 +532,53 @@ function currentActiveLease(db: CodexWebDatabase): { connectionId: string; epoch
     | { connection_id: string; epoch: number; lease_expires_at: number }
     | undefined;
   return row && row.lease_expires_at > Date.now() ? { connectionId: row.connection_id, epoch: row.epoch } : undefined;
+}
+
+function connectionStatus(db: CodexWebDatabase, deviceSessionId: string): { canTakeover: boolean; state: "active" | "available" | "busy" } {
+  const row = db.prepare("SELECT connection_id, device_session_id_hash, lease_expires_at FROM active_connection WHERE singleton_id = 1").get() as
+    | { connection_id: string; device_session_id_hash: string; lease_expires_at: number }
+    | undefined;
+  if (!row || row.lease_expires_at <= Date.now()) {
+    return { canTakeover: false, state: "available" };
+  }
+  return row.device_session_id_hash === deviceSessionId ? { canTakeover: false, state: "active" } : { canTakeover: true, state: "busy" };
+}
+
+function setSettingValue(db: CodexWebDatabase, key: string, value: string): void {
+  db.prepare(
+    `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+  ).run(key, value, Date.now());
+}
+
+function settingValue(db: CodexWebDatabase, key: string): string | undefined {
+  const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as { value: string } | undefined;
+  return row?.value;
+}
+
+function numberSettingValue(db: CodexWebDatabase, key: string): number | undefined {
+  const value = settingValue(db, key);
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  return Number.isInteger(parsed) ? parsed : undefined;
+}
+
+function runtimeErrorMetadata(error: unknown): { code: string; message: string } {
+  const message = error instanceof Error ? error.message : "App-server unavailable";
+  return {
+    code: /unavailable|failed|exited/i.test(message) ? "APP_SERVER_UNAVAILABLE" : "APP_SERVER_READ_FAILED",
+    message: redactRuntimeError(message),
+  };
+}
+
+function redactRuntimeError(message: string): string {
+  return message
+    .replace(/[A-Z]:\\Users\\[^\\\r\n"]+/g, "<USER_HOME>")
+    .replace(/token=[^\s"'\\]+/gi, "token=<redacted>")
+    .replace(/(prompt|message|reasoning|output|diff|body)\b[^}\r\n]*/gi, "$1=<redacted>")
+    .slice(0, 240);
 }
 
 async function readJsonBody<T extends Record<string, unknown>>(request: Request): Promise<T> {

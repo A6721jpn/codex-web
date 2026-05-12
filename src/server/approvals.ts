@@ -87,6 +87,17 @@ export class ApprovalStore {
       .map(toPublicPending);
   }
 
+  reassignLease(from: ApprovalLeaseRef, to: ApprovalLeaseRef): number {
+    let reassigned = 0;
+    for (const approval of this.#pending.values()) {
+      if (approval.lease.connectionId === from.connectionId && approval.lease.epoch === from.epoch) {
+        approval.lease = { ...to };
+        reassigned += 1;
+      }
+    }
+    return reassigned;
+  }
+
   markDecided(
     approvalId: string,
     lease: ApprovalLeaseRef,

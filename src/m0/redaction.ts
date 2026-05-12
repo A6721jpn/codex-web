@@ -39,7 +39,9 @@ export function redactString(value: string): string {
   }
   return redacted
     .replace(/[A-Z]:\\Users\\[^\\\r\n]+/g, "<USER_HOME>")
-    .replace(/[A-Z]:\\\\Users\\\\[^\\\r\n"]+/g, "<USER_HOME_ESCAPED>");
+    .replace(/[A-Z]:\\\\Users\\\\[^\\\r\n"]+/g, "<USER_HOME_ESCAPED>")
+    .replace(/token=[^\s"'\\]+/gi, "token=<redacted>")
+    .replace(/(prompt|message|reasoning|output|diff|body)\b[^}\r\n]*/gi, "$1=<redacted>");
 }
 
 export async function hashDirectory(input: string | Map<string, string | Buffer>): Promise<string> {

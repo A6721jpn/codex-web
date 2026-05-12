@@ -1,13 +1,11 @@
 import { createServer } from "node:http";
-import { readFile } from "node:fs/promises";
-import { extname, join, resolve } from "node:path";
+import { resolve } from "node:path";
 
 import { createCodexWebApp } from "./app.ts";
+import { readStaticAsset } from "./static.ts";
 
 const app = await createCodexWebApp();
 const root = resolve(import.meta.dirname, "../..");
-const clientRoot = resolve(root, "dist/client");
-const fallbackClientRoot = resolve(root, "src/client");
 
 const server = createServer(async (req, res) => {
   const host = req.headers.host ?? `${app.config.host}:${app.config.port}`;
@@ -24,7 +22,7 @@ const server = createServer(async (req, res) => {
     return;
   }
 
-  const file = await readStatic(req.url ?? "/");
+  const file = await readStaticAsset(req.url ?? "/", { root });
   res.writeHead(file.status, file.headers);
   res.end(file.body);
 });
@@ -52,38 +50,4 @@ async function shutdown(): Promise<void> {
 async function writeResponse(res: import("node:http").ServerResponse, response: Response): Promise<void> {
   res.writeHead(response.status, Object.fromEntries(response.headers.entries()));
   res.end(Buffer.from(await response.arrayBuffer()));
-}
-
-async function readStatic(urlPath: string): Promise<{ body: Buffer | string; headers: Record<string, string>; status: number }> {
-  const cleanPath = new URL(`http://local${urlPath}`).pathname;
-  const relative = cleanPath === "/" ? "index.html" : cleanPath.slice(1);
-  const candidates = [join(clientRoot, relative), join(fallbackClientRoot, relative)];
-  for (const candidate of candidates) {
-    try {
-      return {
-        body: await readFile(candidate),
-        headers: {
-          "cache-control": "no-cache",
-          "content-type": contentType(candidate),
-        },
-        status: 200,
-      };
-    } catch {
-      // Try the next candidate.
-    }
-  }
-  return { body: "Not found", headers: { "content-type": "text/plain; charset=utf-8" }, status: 404 };
-}
-
-function contentType(path: string): string {
-  switch (extname(path)) {
-    case ".html":
-      return "text/html; charset=utf-8";
-    case ".js":
-      return "text/javascript; charset=utf-8";
-    case ".css":
-      return "text/css; charset=utf-8";
-    default:
-      return "application/octet-stream";
-  }
 }
