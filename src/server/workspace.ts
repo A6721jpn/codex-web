@@ -12,6 +12,7 @@ export type CanonicalWorkspacePath = {
 };
 
 export type WorkspaceRecord = CanonicalWorkspacePath & {
+  defaultPermissionPreset: "auto_review" | "default";
   id: number;
   lastOpenedAt: number;
   trustState: "trusted" | "untrusted";
@@ -157,6 +158,7 @@ export class WorkspaceStore {
       .run("workspace.opened", "workspace", String(row.id), JSON.stringify({ exists: canonical.exists, isSymlink: canonical.isSymlink }), now);
     return {
       ...canonical,
+      defaultPermissionPreset: "default",
       id: row.id,
       lastOpenedAt: now,
       trustState: "untrusted",
@@ -166,7 +168,7 @@ export class WorkspaceStore {
   list(): WorkspaceRecord[] {
     return this.#db
       .prepare(
-        `SELECT w.id, w.canonical_path, w.exists_flag, w.real_path, w.is_symlink, w.last_opened_at, p.trust_state
+        `SELECT w.id, w.canonical_path, w.exists_flag, w.real_path, w.is_symlink, w.last_opened_at, p.trust_state, p.default_permission_preset
          FROM workspaces w
          JOIN workspace_policy p ON p.workspace_id = w.id
          ORDER BY w.last_opened_at DESC, w.id DESC`,
@@ -178,7 +180,7 @@ export class WorkspaceStore {
   getById(id: number): WorkspaceRecord | undefined {
     const row = this.#db
       .prepare(
-        `SELECT w.id, w.canonical_path, w.exists_flag, w.real_path, w.is_symlink, w.last_opened_at, p.trust_state
+        `SELECT w.id, w.canonical_path, w.exists_flag, w.real_path, w.is_symlink, w.last_opened_at, p.trust_state, p.default_permission_preset
          FROM workspaces w
          JOIN workspace_policy p ON p.workspace_id = w.id
          WHERE w.id = ?`,
@@ -195,6 +197,7 @@ export class WorkspaceStore {
   #toRecord(row: WorkspaceRow): WorkspaceRecord {
     return {
       canonicalPath: row.canonical_path,
+      defaultPermissionPreset: row.default_permission_preset,
       exists: Boolean(row.exists_flag),
       id: row.id,
       isSymlink: Boolean(row.is_symlink),
@@ -207,6 +210,7 @@ export class WorkspaceStore {
 
 type WorkspaceRow = {
   canonical_path: string;
+  default_permission_preset: "auto_review" | "default";
   exists_flag: number;
   id: number;
   is_symlink: number;

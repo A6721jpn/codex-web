@@ -71,6 +71,7 @@ function App(): React.ReactElement {
   const [status, setStatus] = useState<AuthStatus | undefined>();
   const [csrfToken, setCsrfToken] = useState("preauth");
   const [password, setPassword] = useState("");
+  const [takeoverPassword, setTakeoverPassword] = useState("");
   const [error, setError] = useState<string | undefined>();
   const [runtimeError, setRuntimeError] = useState<RuntimeError | undefined>();
   const [lease, setLease] = useState<Lease | undefined>();
@@ -93,10 +94,67 @@ function App(): React.ReactElement {
   }, []);
 
   useEffect(() => {
-    if (status?.authenticated) {
+    if (status?.authenticated && csrfToken !== "preauth") {
       void restoreConnection();
     }
-  }, [status?.authenticated]);
+  }, [status?.authenticated, csrfToken]);
+
+  useEffect(() => {
+    if (!status?.authenticated || !lease || csrfToken === "preauth") {
+      return;
+    }
+    let closed = false;
+    let heartbeat: number | undefined;
+    let socket: WebSocket | undefined;
+    void (async () => {
+      const ticketResponse = await fetch("/api/ws-ticket", {
+        headers: { "x-csrf-token": csrfToken },
+        method: "POST",
+      });
+      if (!ticketResponse.ok || closed) {
+        return;
+      }
+      const ticket = (await ticketResponse.json()) as { ticket?: string };
+      if (!ticket.ticket || closed) {
+        return;
+      }
+      const scheme = window.location.protocol === "https:" ? "wss" : "ws";
+      const params = new URLSearchParams({
+        connectionId: lease.connectionId,
+        epoch: String(lease.epoch),
+        fencingToken: lease.fencingToken,
+        ticket: ticket.ticket,
+      });
+      socket = new WebSocket(`${scheme}://${window.location.host}/ws?${params.toString()}`);
+      socket.onmessage = (event) => {
+        try {
+          const message = JSON.parse(String(event.data)) as { type?: string };
+          if (message.type === "approvals.changed") {
+            void refreshApprovals({ lease, setApprovals, setError });
+          }
+          if (message.type === "connection.revoked") {
+            setConnectionStatus({ canTakeover: true, state: "busy" });
+          }
+        } catch {
+          // Ignore malformed local websocket messages.
+        }
+      };
+      socket.onopen = () => {
+        heartbeat = window.setInterval(() => {
+          if (socket?.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({ ...lease, type: "connection.heartbeat" }));
+          }
+        }, 25_000);
+      };
+    })();
+    return () => {
+      closed = true;
+      if (heartbeat) {
+        window.clearInterval(heartbeat);
+      }
+      socket?.close();
+    };
+  }, [csrfToken, lease?.connectionId, lease?.epoch, lease?.fencingToken, status?.authenticated]);
 
   const visibleThreads = useMemo(() => {
     const term = threadSearch.trim().toLowerCase();
@@ -320,7 +378,30 @@ function App(): React.ReactElement {
           {connectionStatus?.state === "busy" ? (
             <article className="busy-card">
               <strong>In use</strong>
-              <button type="button" onClick={() => void takeover({ csrfToken, password, setConnectionStatus, setError, setLease })}>
+              <label>
+                Takeover password
+                <input
+                  autoComplete="current-password"
+                  onChange={(event) => setTakeoverPassword(event.currentTarget.value)}
+                  type="password"
+                  value={takeoverPassword}
+                />
+              </label>
+              <button
+                disabled={!takeoverPassword}
+                type="button"
+                onClick={() =>
+                  void takeover({
+                    csrfToken,
+                    password: takeoverPassword,
+                    restoreState,
+                    setConnectionStatus,
+                    setError,
+                    setLease,
+                    setTakeoverPassword,
+                  })
+                }
+              >
                 Take over
               </button>
             </article>
@@ -557,9 +638,11 @@ async function saveActiveUi(input: { csrfToken: string; lease: Lease; threadId?:
 async function takeover(input: {
   csrfToken: string;
   password: string;
+  restoreState: (lease: Lease) => Promise<void>;
   setConnectionStatus: (status: ConnectionStatus | undefined) => void;
   setError: (error: string | undefined) => void;
   setLease: (lease: Lease | undefined) => void;
+  setTakeoverPassword: (password: string) => void;
 }): Promise<void> {
   const response = await fetch("/api/connection/takeover", {
     body: JSON.stringify({ password: input.password }),
@@ -570,8 +653,11 @@ async function takeover(input: {
     input.setError("Takeover failed");
     return;
   }
-  input.setLease((await response.json()) as Lease);
+  const takeoverLease = (await response.json()) as Lease;
+  input.setLease(takeoverLease);
   input.setConnectionStatus({ canTakeover: false, state: "active" });
+  input.setTakeoverPassword("");
+  await input.restoreState(takeoverLease);
 }
 
 async function startThread(input: {

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Duplex } from "node:stream";
 import test from "node:test";
 
 import { AppServerClient, type AppServerProcess } from "../../src/server/app-server-client.ts";
@@ -74,6 +75,44 @@ async function loginAndAcquireLease(app: { fetch: (request: Request) => Promise<
   return { ...session, lease: (await response.json()) as { connectionId: string; epoch: number; fencingToken: string } };
 }
 
+class MemorySocket extends Duplex {
+  endedByServer = false;
+  writes: Buffer[] = [];
+
+  _read(): void {}
+
+  _write(chunk: Buffer, _encoding: BufferEncoding, callback: (error?: Error | null) => void): void {
+    this.writes.push(Buffer.from(chunk));
+    callback();
+  }
+
+  override end(callback?: () => void): this;
+  override end(chunk: unknown, callback?: () => void): this;
+  override end(chunk: unknown, encoding: BufferEncoding, callback?: () => void): this;
+  override end(chunk?: unknown, encodingOrCallback?: BufferEncoding | (() => void), callback?: () => void): this {
+    this.endedByServer = true;
+    if (typeof encodingOrCallback === "function") {
+      return super.end(chunk, encodingOrCallback);
+    }
+    return encodingOrCallback ? super.end(chunk, encodingOrCallback, callback) : super.end(chunk, callback);
+  }
+}
+
+function websocketKey(): string {
+  return Buffer.from("codex-web-test-key").toString("base64");
+}
+
+function maskedClientFrame(body: unknown): Buffer {
+  const payload = Buffer.from(JSON.stringify(body), "utf8");
+  const mask = Buffer.from([1, 2, 3, 4]);
+  const header = payload.length <= 125 ? Buffer.from([0x81, 0x80 | payload.length]) : Buffer.from([0x81, 0xfe, payload.length >> 8, payload.length & 0xff]);
+  const masked = Buffer.alloc(payload.length);
+  for (let index = 0; index < payload.length; index += 1) {
+    masked[index] = payload[index]! ^ mask[index % 4]!;
+  }
+  return Buffer.concat([header, mask, masked]);
+}
+
 test("same-device reload reacquires the active lease through semantic reconnect", async () => {
   await withTempDir(async (dir) => {
     const app = await createCodexWebApp({
@@ -92,6 +131,100 @@ test("same-device reload reacquires the active lease through semantic reconnect"
       assert.equal(lease.state, "active");
       assert.notEqual(lease.connectionId, session.lease.connectionId);
       assert.equal(lease.epoch, session.lease.epoch + 1);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+test("same-device reconnect revokes the previous websocket connection", async () => {
+  await withTempDir(async (dir) => {
+    const app = await createCodexWebApp({
+      appServer: new FakeAppServerRuntime(),
+      env: {
+        CODEX_WEB_DB_PATH: join(dir, "api.sqlite"),
+        CODEX_WEB_PUBLIC_ORIGIN: "http://localhost:8787",
+        CODEX_WEB_SESSION_SECRET: "s".repeat(32),
+      },
+    });
+    try {
+      await setupPassword(app);
+      const session = await login(app);
+      const ticketResponse = await app.fetch(
+        new Request("http://localhost:8787/api/ws-ticket", {
+          headers: { cookie: session.cookie, origin: "http://localhost:8787", "x-csrf-token": session.csrfToken },
+          method: "POST",
+        }),
+      );
+      const ticket = ((await ticketResponse.json()) as { ticket: string }).ticket;
+      const socket = new MemorySocket();
+      await app.handleUpgrade(
+        new Request(`http://localhost:8787/ws?ticket=${encodeURIComponent(ticket)}`, {
+          headers: {
+            cookie: session.cookie,
+            host: "localhost:8787",
+            origin: "http://localhost:8787",
+            "sec-websocket-key": websocketKey(),
+            "user-agent": "same-device",
+          },
+        }),
+        socket,
+      );
+
+      assert.equal(socket.endedByServer, false);
+      const reconnected = await reconnect(app, session);
+      assert.equal(reconnected.status, 200);
+      assert.equal(socket.endedByServer, true);
+      assert(Buffer.concat(socket.writes).includes(Buffer.from("connection.revoked")));
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+test("websocket heartbeat messages receive an acknowledgement", async () => {
+  await withTempDir(async (dir) => {
+    const app = await createCodexWebApp({
+      appServer: new FakeAppServerRuntime(),
+      env: {
+        CODEX_WEB_DB_PATH: join(dir, "api.sqlite"),
+        CODEX_WEB_PUBLIC_ORIGIN: "http://localhost:8787",
+        CODEX_WEB_SESSION_SECRET: "s".repeat(32),
+      },
+    });
+    try {
+      await setupPassword(app);
+      const session = await login(app);
+      const ticketResponse = await app.fetch(
+        new Request("http://localhost:8787/api/ws-ticket", {
+          headers: { cookie: session.cookie, origin: "http://localhost:8787", "x-csrf-token": session.csrfToken },
+          method: "POST",
+        }),
+      );
+      const ticket = ((await ticketResponse.json()) as { ticket: string }).ticket;
+      const socket = new MemorySocket();
+      await app.handleUpgrade(
+        new Request(`http://localhost:8787/ws?ticket=${encodeURIComponent(ticket)}`, {
+          headers: {
+            cookie: session.cookie,
+            host: "localhost:8787",
+            origin: "http://localhost:8787",
+            "sec-websocket-key": websocketKey(),
+          },
+        }),
+        socket,
+      );
+      const readyText = Buffer.concat(socket.writes).toString("utf8");
+      const connectionId = readyText.match(/"connectionId":"([^"]+)"/)?.[1];
+      const epoch = Number(readyText.match(/"epoch":(\d+)/)?.[1]);
+      const fencingToken = readyText.match(/"fencingToken":"([^"]+)"/)?.[1];
+      assert(connectionId);
+      assert(Number.isInteger(epoch));
+      assert(fencingToken);
+
+      socket.push(maskedClientFrame({ connectionId, epoch, fencingToken, type: "connection.heartbeat" }));
+      await new Promise((resolve) => setImmediate(resolve));
+      assert(Buffer.concat(socket.writes).includes(Buffer.from("connection.heartbeat.ack")));
     } finally {
       await app.close();
     }
@@ -496,4 +629,3 @@ test("stdout and stderr redaction and caps survive reconnect recovery work", asy
   assert(!diagnostics.includes("C:\\Users\\aokuni"));
   await client.close();
 });
-

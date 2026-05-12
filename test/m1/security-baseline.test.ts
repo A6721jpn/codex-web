@@ -6,6 +6,7 @@ import test from "node:test";
 
 import { createCodexWebApp } from "../../src/server/app.ts";
 import { AuthService } from "../../src/server/auth.ts";
+import { FakeAppServerRuntime } from "../../src/server/chat-runtime.ts";
 import { ConnectionLeaseManager } from "../../src/server/connection-lease.ts";
 import { getConfig } from "../../src/server/config.ts";
 import { applyMigrations, openDatabase } from "../../src/server/db.ts";
@@ -20,6 +21,58 @@ async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+}
+
+function leaseHeaders(input: {
+  cookie: string;
+  lease: { connectionId: string; epoch: number; fencingToken: string };
+}): Record<string, string> {
+  return {
+    cookie: input.cookie,
+    "x-codex-connection-id": input.lease.connectionId,
+    "x-codex-connection-epoch": String(input.lease.epoch),
+    "x-codex-fencing-token": input.lease.fencingToken,
+  };
+}
+
+async function setupPassword(app: { fetch: (request: Request) => Promise<Response> }): Promise<void> {
+  await app.fetch(
+    new Request("http://localhost:8787/api/auth/setup", {
+      body: JSON.stringify({ password: "pw-123456789" }),
+      headers: { origin: "http://localhost:8787", "x-csrf-token": "preauth" },
+      method: "POST",
+    }),
+  );
+}
+
+async function login(app: { fetch: (request: Request) => Promise<Response> }, userAgent = "test-browser"): Promise<{
+  cookie: string;
+  csrfToken: string;
+}> {
+  const response = await app.fetch(
+    new Request("http://localhost:8787/api/auth/login", {
+      body: JSON.stringify({ password: "pw-123456789" }),
+      headers: { origin: "http://localhost:8787", "user-agent": userAgent, "x-csrf-token": "preauth" },
+      method: "POST",
+    }),
+  );
+  const body = (await response.json()) as { csrfToken: string };
+  return { cookie: response.headers.get("set-cookie")!.split(";")[0]!, csrfToken: body.csrfToken };
+}
+
+async function loginAndAcquireLease(app: { fetch: (request: Request) => Promise<Response> }): Promise<{
+  cookie: string;
+  csrfToken: string;
+  lease: { connectionId: string; epoch: number; fencingToken: string };
+}> {
+  const session = await login(app);
+  const response = await app.fetch(
+    new Request("http://localhost:8787/api/connection/reconnect", {
+      headers: { cookie: session.cookie, origin: "http://localhost:8787", "x-csrf-token": session.csrfToken },
+      method: "POST",
+    }),
+  );
+  return { ...session, lease: (await response.json()) as { connectionId: string; epoch: number; fencingToken: string } };
 }
 
 test("runtime config applies defaults and initializes data directories", async () => {
@@ -102,6 +155,89 @@ test("login rotates signed HttpOnly sessions and logout revokes reuse", async ()
     auth.logout(second.cookieValue);
     assert.equal(auth.readSession(second.cookieValue), undefined);
     db.close();
+  });
+});
+
+test("authenticated csrf endpoint rotates a token that works after browser reload", async () => {
+  await withTempDir(async (dir) => {
+    const app = await createCodexWebApp({
+      appServer: new FakeAppServerRuntime(),
+      env: {
+        CODEX_WEB_DB_PATH: join(dir, "api.sqlite"),
+        CODEX_WEB_PUBLIC_ORIGIN: "http://localhost:8787",
+        CODEX_WEB_SESSION_SECRET: "s".repeat(32),
+      },
+    });
+    try {
+      await setupPassword(app);
+      const session = await login(app);
+      const csrf = await app.fetch(new Request("http://localhost:8787/api/csrf", { headers: { cookie: session.cookie } }));
+      assert.equal(csrf.status, 200);
+      const body = (await csrf.json()) as { csrfToken?: string };
+      assert(body.csrfToken);
+      assert.notEqual(body.csrfToken, "preauth");
+      assert.notEqual(body.csrfToken, session.csrfToken);
+
+      const reconnect = await app.fetch(
+        new Request("http://localhost:8787/api/connection/reconnect", {
+          headers: { cookie: session.cookie, origin: "http://localhost:8787", "x-csrf-token": body.csrfToken },
+          method: "POST",
+        }),
+      );
+      assert.equal(reconnect.status, 200);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+test("auth setup login and takeover failures return stable json errors", async () => {
+  await withTempDir(async (dir) => {
+    const app = await createCodexWebApp({
+      appServer: new FakeAppServerRuntime(),
+      env: {
+        CODEX_WEB_DB_PATH: join(dir, "api.sqlite"),
+        CODEX_WEB_PUBLIC_ORIGIN: "http://localhost:8787",
+        CODEX_WEB_SESSION_SECRET: "s".repeat(32),
+      },
+    });
+    try {
+      await setupPassword(app);
+      const duplicateSetup = await app.fetch(
+        new Request("http://localhost:8787/api/auth/setup", {
+          body: JSON.stringify({ password: "pw-123456789" }),
+          headers: { origin: "http://localhost:8787", "x-csrf-token": "preauth" },
+          method: "POST",
+        }),
+      );
+      assert.equal(duplicateSetup.status, 409);
+      assert.match(await duplicateSetup.text(), /Password is already configured/);
+
+      const badLogin = await app.fetch(
+        new Request("http://localhost:8787/api/auth/login", {
+          body: JSON.stringify({ password: "wrong-password" }),
+          headers: { origin: "http://localhost:8787", "x-csrf-token": "preauth", "x-forwarded-for": "bad-login-ip" },
+          method: "POST",
+        }),
+      );
+      assert.equal(badLogin.status, 401);
+      assert.match(await badLogin.text(), /Invalid password/);
+
+      const first = await loginAndAcquireLease(app);
+      const second = await login(app, "second-device");
+      const badTakeover = await app.fetch(
+        new Request("http://localhost:8787/api/connection/takeover", {
+          body: JSON.stringify({ password: "wrong-password" }),
+          headers: { cookie: second.cookie, origin: "http://localhost:8787", "x-csrf-token": second.csrfToken },
+          method: "POST",
+        }),
+      );
+      assert.equal(badTakeover.status, 401);
+      assert.match(await badTakeover.text(), /Invalid password/);
+      assert.equal((await app.fetch(new Request("http://localhost:8787/api/workspaces", { headers: leaseHeaders(first) }))).status, 200);
+    } finally {
+      await app.close();
+    }
   });
 });
 

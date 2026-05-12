@@ -126,6 +126,14 @@ export class AuthService {
     };
   }
 
+  rotateCsrfToken(session: AuthenticatedSession): string {
+    const csrfToken = randomToken();
+    this.#db
+      .prepare("UPDATE device_sessions SET csrf_token_hash = ?, last_seen_at = ? WHERE session_id_hash = ?")
+      .run(hmacHex(this.#secret, csrfToken), this.#now(), session.sessionHash);
+    return csrfToken;
+  }
+
   logout(cookieValue: string | undefined): void {
     const sessionId = this.#verifySigned(cookieValue);
     if (!sessionId) {

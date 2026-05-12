@@ -39,24 +39,20 @@ export async function createCodexWebApp(input: { appServer?: AppServerRuntime; e
   const workspaces = new WorkspaceStore(db);
   const approvals = new ApprovalStore(db);
   const appServer = input.appServer ?? new AppServerClient({ codexBin: config.codexBin });
+  const sockets = new Map<string, Duplex>();
   const runtime = new ChatRuntime({
     appServer,
     approvals,
     getActiveLease: () => currentActiveLease(db),
+    onApprovalsChanged: (lease) => sendWebSocketJson(sockets.get(lease.connectionId), { type: "approvals.changed" }),
     threads,
     workspaces,
   });
-  const sockets = new Map<string, Duplex>();
   leases.on("revoked", (event: { connectionId?: string; reason: string }) => {
     if (!event.connectionId) {
       return;
     }
-    const socket = sockets.get(event.connectionId);
-    if (socket) {
-      sendWebSocketJson(socket, { reason: event.reason, type: "connection.revoked" });
-      socket.end();
-      sockets.delete(event.connectionId);
-    }
+    closeSocket(sockets, event.connectionId, event.reason);
   });
 
   return {
@@ -65,7 +61,7 @@ export async function createCodexWebApp(input: { appServer?: AppServerRuntime; e
       db.close();
     },
     config,
-    fetch: async (request) => await routeRequest({ auth, config, db, leases, request, runtime, threads, tickets, workspaces }),
+    fetch: async (request) => await routeRequest({ auth, config, db, leases, request, runtime, sockets, threads, tickets, workspaces }),
     handleUpgrade: async (request, socket) => {
       await handleUpgrade({ auth, config, leases, request, socket, sockets, tickets });
     },
@@ -79,6 +75,7 @@ async function routeRequest(input: {
   leases: ConnectionLeaseManager;
   request: Request;
   runtime: ChatRuntime;
+  sockets: Map<string, Duplex>;
   threads: ThreadIndexStore;
   tickets: WebSocketTicketStore;
   workspaces: WorkspaceStore;
@@ -93,7 +90,7 @@ async function routeRequest(input: {
   }
   if (input.request.method === "GET" && url.pathname === "/api/csrf") {
     const session = readAuthenticatedSession(input.auth, input.request);
-    return json({ csrfToken: session ? undefined : "preauth" });
+    return json({ csrfToken: session ? input.auth.rotateCsrfToken(session) : "preauth" });
   }
   if (input.request.method === "GET" && url.pathname === "/api/auth/status") {
     const session = readAuthenticatedSession(input.auth, input.request);
@@ -111,8 +108,12 @@ async function routeRequest(input: {
       return json({ error: csrf.reason }, 403);
     }
     const body = (await input.request.json()) as { password?: string };
-    await input.auth.setupPassword(body.password ?? "");
-    return json({ ok: true });
+    try {
+      await input.auth.setupPassword(body.password ?? "");
+      return json({ ok: true });
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : "Setup failed" }, error instanceof Error && /already configured/i.test(error.message) ? 409 : 400);
+    }
   }
 
   if (input.request.method === "POST" && url.pathname === "/api/auth/login") {
@@ -126,11 +127,16 @@ async function routeRequest(input: {
       return json({ error: csrf.reason }, 403);
     }
     const body = (await input.request.json()) as { password?: string };
-    const result = await input.auth.login(body.password ?? "", {
-      ip: input.request.headers.get("x-forwarded-for") ?? "local",
-      userAgent: input.request.headers.get("user-agent") ?? "",
-    });
-    return json({ csrfToken: result.csrfToken, ok: true }, 200, { "set-cookie": result.setCookie });
+    try {
+      const result = await input.auth.login(body.password ?? "", {
+        ip: input.request.headers.get("x-forwarded-for") ?? "local",
+        userAgent: input.request.headers.get("user-agent") ?? "",
+      });
+      return json({ csrfToken: result.csrfToken, ok: true }, 200, { "set-cookie": result.setCookie });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Login failed";
+      return json({ error: message }, /temporarily blocked/i.test(message) ? 429 : 401);
+    }
   }
 
   const session = readAuthenticatedSession(input.auth, input.request);
@@ -165,20 +171,25 @@ async function routeRequest(input: {
     }
     if (previousLease && (previousLease.connectionId !== lease.connectionId || previousLease.epoch !== lease.epoch)) {
       input.runtime.reassignApprovals(previousLease, { connectionId: lease.connectionId, epoch: lease.epoch });
+      closeSocket(input.sockets, previousLease.connectionId, "reconnect");
     }
     return json(lease);
   }
 
   if (input.request.method === "POST" && url.pathname === "/api/connection/takeover") {
     const body = (await input.request.json()) as { password?: string };
-    const lease = await input.leases.takeover({
-      auth: input.auth,
-      deviceLabel: "browser",
-      deviceSessionId: session.deviceSessionId,
-      password: body.password ?? "",
-      userAgent: input.request.headers.get("user-agent") ?? "",
-    });
-    return json(lease);
+    try {
+      const lease = await input.leases.takeover({
+        auth: input.auth,
+        deviceLabel: "browser",
+        deviceSessionId: session.deviceSessionId,
+        password: body.password ?? "",
+        userAgent: input.request.headers.get("user-agent") ?? "",
+      });
+      return json(lease);
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : "Takeover failed" }, 401);
+    }
   }
 
   if (input.request.method === "GET" && url.pathname === "/api/workspaces") {
@@ -467,7 +478,9 @@ async function handleUpgrade(input: {
     return;
   }
 
-  const lease = input.leases.acquire(session.deviceSessionId, "browser", input.request.headers.get("user-agent") ?? "");
+  const requestedLease = readLeaseFromUrl(url);
+  const previousLease = currentActiveLeaseFromManager(input.leases, requestedLease);
+  const lease = previousLease ?? input.leases.acquire(session.deviceSessionId, "browser", input.request.headers.get("user-agent") ?? "");
   if (lease.state === "busy") {
     input.socket.end("HTTP/1.1 409 Conflict\r\nConnection: close\r\n\r\n");
     return;
@@ -489,6 +502,14 @@ async function handleUpgrade(input: {
   input.sockets.set(lease.connectionId, input.socket);
   input.socket.on("close", () => input.sockets.delete(lease.connectionId));
   input.socket.on("end", () => input.sockets.delete(lease.connectionId));
+  input.socket.on("data", (chunk: Buffer) => {
+    for (const message of parseWebSocketMessages(chunk)) {
+      if (message.type === "connection.heartbeat") {
+        const ok = input.leases.heartbeat(message.connectionId, message.epoch, message.fencingToken);
+        sendWebSocketJson(input.socket, { ok, type: "connection.heartbeat.ack" });
+      }
+    }
+  });
   sendWebSocketJson(input.socket, {
     connectionId: lease.connectionId,
     epoch: lease.epoch,
@@ -496,6 +517,34 @@ async function handleUpgrade(input: {
     leaseExpiresAt: lease.leaseExpiresAt,
     type: "connection.ready",
   });
+}
+
+function closeSocket(sockets: Map<string, Duplex>, connectionId: string, reason: string): void {
+  const socket = sockets.get(connectionId);
+  if (!socket) {
+    return;
+  }
+  sendWebSocketJson(socket, { reason, type: "connection.revoked" });
+  socket.end();
+  sockets.delete(connectionId);
+}
+
+function readLeaseFromUrl(url: URL): { connectionId: string; epoch: number; fencingToken: string } | undefined {
+  const connectionId = url.searchParams.get("connectionId");
+  const epoch = Number(url.searchParams.get("epoch"));
+  const fencingToken = url.searchParams.get("fencingToken");
+  return connectionId && Number.isInteger(epoch) && fencingToken ? { connectionId, epoch, fencingToken } : undefined;
+}
+
+function currentActiveLeaseFromManager(
+  leases: ConnectionLeaseManager,
+  requestedLease: { connectionId: string; epoch: number; fencingToken: string } | undefined,
+): (Extract<ReturnType<ConnectionLeaseManager["acquire"]>, { state: "active" }> & { leaseExpiresAt: number }) | undefined {
+  if (!requestedLease || !leases.canUse(requestedLease.connectionId, requestedLease.epoch, requestedLease.fencingToken)) {
+    return undefined;
+  }
+  leases.heartbeat(requestedLease.connectionId, requestedLease.epoch, requestedLease.fencingToken);
+  return { ...requestedLease, leaseExpiresAt: Date.now() + 60_000, state: "active" };
 }
 
 function readAuthenticatedSession(auth: AuthService, request: Request) {
@@ -631,7 +680,10 @@ function webSocketAccept(key: string): string {
     .digest("base64");
 }
 
-function sendWebSocketJson(socket: Duplex, body: unknown): void {
+function sendWebSocketJson(socket: Duplex | undefined, body: unknown): void {
+  if (!socket) {
+    return;
+  }
   const payload = Buffer.from(JSON.stringify(body), "utf8");
   if (payload.length <= 125) {
     socket.write(Buffer.concat([Buffer.from([0x81, payload.length]), payload]));
@@ -646,4 +698,58 @@ function sendWebSocketJson(socket: Duplex, body: unknown): void {
     return;
   }
   throw new Error("M1 WebSocket frame too large");
+}
+
+function parseWebSocketMessages(chunk: Buffer): Array<{ connectionId: string; epoch: number; fencingToken: string; type: string }> {
+  const messages: Array<{ connectionId: string; epoch: number; fencingToken: string; type: string }> = [];
+  let offset = 0;
+  while (offset + 2 <= chunk.length) {
+    const second = chunk[offset + 1]!;
+    const masked = Boolean(second & 0x80);
+    let length = second & 0x7f;
+    offset += 2;
+    if (length === 126) {
+      if (offset + 2 > chunk.length) {
+        break;
+      }
+      length = chunk.readUInt16BE(offset);
+      offset += 2;
+    } else if (length === 127) {
+      break;
+    }
+    if (!masked || offset + 4 + length > chunk.length) {
+      break;
+    }
+    const mask = chunk.subarray(offset, offset + 4);
+    offset += 4;
+    const payload = Buffer.alloc(length);
+    for (let index = 0; index < length; index += 1) {
+      payload[index] = chunk[offset + index]! ^ mask[index % 4]!;
+    }
+    offset += length;
+    try {
+      const parsed = JSON.parse(payload.toString("utf8")) as {
+        connectionId?: unknown;
+        epoch?: unknown;
+        fencingToken?: unknown;
+        type?: unknown;
+      };
+      if (
+        typeof parsed.connectionId === "string" &&
+        typeof parsed.epoch === "number" &&
+        typeof parsed.fencingToken === "string" &&
+        typeof parsed.type === "string"
+      ) {
+        messages.push({
+          connectionId: parsed.connectionId,
+          epoch: parsed.epoch,
+          fencingToken: parsed.fencingToken,
+          type: parsed.type,
+        });
+      }
+    } catch {
+      // Ignore malformed browser frames; the next heartbeat will retry.
+    }
+  }
+  return messages;
 }

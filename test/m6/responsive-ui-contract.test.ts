@@ -223,6 +223,23 @@ test("busy takeover UI state has a semantic API contract without lease secrets",
   });
 });
 
+test("client busy takeover collects password and restores state after success", async () => {
+  const source = await readFile("src/client/main.tsx", "utf8");
+  assert(source.includes("takeoverPassword"));
+  assert(source.includes("Takeover password"));
+  assert(source.includes("restoreState(takeoverLease)"));
+  assert(source.includes("setTakeoverPassword(\"\")"));
+});
+
+test("client websocket keeps active lease alive and refreshes approvals on server events", async () => {
+  const source = await readFile("src/client/main.tsx", "utf8");
+  assert(source.includes("new WebSocket"));
+  assert(source.includes("/api/ws-ticket"));
+  assert(source.includes("connection.heartbeat"));
+  assert(source.includes("approvals.changed"));
+  assert(source.includes("refreshApprovals"));
+});
+
 test("approval decision route keeps M4 active lease CSRF and raw body constraints", async () => {
   await withTempDir(async (dir) => {
     const appServer = new FakeAppServerRuntime();
@@ -313,6 +330,7 @@ test("responsive UI source exposes chat layout search drawer busy approval and e
 test("responsive CSS covers phone tablet and desktop without one-note palette or nested cards", async () => {
   const css = await readFile("src/client/styles.css", "utf8");
   assert(css.includes("@media (max-width: 520px)"));
+  assert(css.includes("@media (min-width: 521px) and (max-width: 760px)"));
   assert(css.includes("@media (min-width: 761px) and (max-width: 1024px)"));
   assert(css.includes("@media (min-width: 1025px)"));
   assert(css.includes("overflow-wrap: anywhere"));
@@ -350,4 +368,3 @@ test("UI routes still do not expose raw RPC endpoints", async () => {
     }
   });
 });
-

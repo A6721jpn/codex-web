@@ -149,6 +149,28 @@ test("ChatRuntime builds start/resume/turn/interrupt calls from server-side work
   });
 });
 
+test("ChatRuntime maps workspace auto_review permission policy into app-server calls", async () => {
+  await withDb(async (db, dir) => {
+    const workspacePath = join(dir, "repo");
+    await mkdir(workspacePath);
+    const workspaces = new WorkspaceStore(db, { now: () => 10 });
+    const workspace = await workspaces.open(workspacePath);
+    db.prepare("UPDATE workspace_policy SET default_permission_preset = ? WHERE workspace_id = ?").run("auto_review", workspace.id);
+
+    const appServer = new FakeAppServerRuntime();
+    const runtime = new ChatRuntime({ appServer, threads: new ThreadIndexStore(db), workspaces });
+
+    await runtime.startThread({ prompt: undefined, workspaceId: workspace.id });
+    await runtime.resumeThread({ threadId: "thread-1", workspaceId: workspace.id });
+    await runtime.startTurn({ input: "next", threadId: "thread-1", workspaceId: workspace.id });
+
+    assert.equal(appServer.threadStartCalls[0]?.approvalPolicy, "on-request");
+    assert.equal(appServer.threadStartCalls[0]?.approvalsReviewer, "auto_review");
+    assert.equal(appServer.threadResumeCalls[0]?.approvalsReviewer, "auto_review");
+    assert.equal(appServer.turnStartCalls[0]?.approvalsReviewer, "auto_review");
+  });
+});
+
 test("thread/read and thread/turns/list return runtime data without saving bodies to SQLite", async () => {
   await withDb(async (db) => {
     const appServer = new FakeAppServerRuntime({

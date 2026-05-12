@@ -40,6 +40,7 @@ type ChatRuntimeOptions = {
   appServer: AppServerRuntime;
   approvals?: ApprovalStore;
   getActiveLease?: () => ApprovalLeaseRef | undefined;
+  onApprovalsChanged?: (lease: ApprovalLeaseRef) => void;
   threads: ThreadIndexStore;
   workspaces: WorkspaceStore;
 };
@@ -75,6 +76,7 @@ export class ChatRuntime {
   #appServer: AppServerRuntime;
   #approvals?: ApprovalStore;
   #getActiveLease?: () => ApprovalLeaseRef | undefined;
+  #onApprovalsChanged?: (lease: ApprovalLeaseRef) => void;
   #serverRequestListener?: (event: AppServerRequestEvent) => void;
   #threads: ThreadIndexStore;
   #workspaces: WorkspaceStore;
@@ -83,6 +85,7 @@ export class ChatRuntime {
     this.#appServer = options.appServer;
     this.#approvals = options.approvals;
     this.#getActiveLease = options.getActiveLease;
+    this.#onApprovalsChanged = options.onApprovalsChanged;
     this.#threads = options.threads;
     this.#workspaces = options.workspaces;
     if (this.#approvals && this.#appServer.on) {
@@ -159,9 +162,10 @@ export class ChatRuntime {
   async startThread(input: SemanticWorkspaceInput & { prompt?: string }): Promise<{ thread: AppServerThread; turn?: { id?: string } }> {
     await this.#ensureReady();
     const workspace = this.#requireWorkspace(input.workspaceId);
+    const permissions = permissionConfig(workspace.defaultPermissionPreset);
     const result = (await this.#appServer.threadStart({
-      approvalPolicy: "on-request",
-      approvalsReviewer: "user",
+      approvalPolicy: permissions.approvalPolicy,
+      approvalsReviewer: permissions.approvalsReviewer,
       cwd: workspace.canonicalPath,
       experimentalRawEvents: false,
       persistExtendedHistory: false,
@@ -169,7 +173,8 @@ export class ChatRuntime {
     })) as { thread: AppServerThread; turn?: { id?: string } };
     this.#upsertResultThread(result);
     if (input.prompt?.trim() && isThreadStartResult(result)) {
-      await this.startTurn({ input: input.prompt, threadId: result.thread.id, workspaceId: input.workspaceId });
+      const turn = await this.startTurn({ input: input.prompt, threadId: result.thread.id, workspaceId: input.workspaceId });
+      return { ...result, turn: turn.turn };
     }
     return result;
   }
@@ -177,9 +182,10 @@ export class ChatRuntime {
   async resumeThread(input: SemanticWorkspaceInput & { threadId: string }): Promise<{ thread: AppServerThread }> {
     await this.#ensureReady();
     const workspace = this.#requireWorkspace(input.workspaceId);
+    const permissions = permissionConfig(workspace.defaultPermissionPreset);
     const result = (await this.#appServer.threadResume({
-      approvalPolicy: "on-request",
-      approvalsReviewer: "user",
+      approvalPolicy: permissions.approvalPolicy,
+      approvalsReviewer: permissions.approvalsReviewer,
       cwd: workspace.canonicalPath,
       excludeTurns: true,
       persistExtendedHistory: false,
@@ -193,9 +199,10 @@ export class ChatRuntime {
   async startTurn(input: SemanticWorkspaceInput & { input: string; threadId: string }): Promise<{ turn: { id?: string; status?: string } }> {
     await this.#ensureReady();
     const workspace = this.#requireWorkspace(input.workspaceId);
+    const permissions = permissionConfig(workspace.defaultPermissionPreset);
     return (await this.#appServer.turnStart({
-      approvalPolicy: "on-request",
-      approvalsReviewer: "user",
+      approvalPolicy: permissions.approvalPolicy,
+      approvalsReviewer: permissions.approvalsReviewer,
       cwd: workspace.canonicalPath,
       input: [{ text: input.input, text_elements: [], type: "text" }],
       sandboxPolicy: { mode: "workspaceWrite", networkAccess: false },
@@ -261,6 +268,7 @@ export class ChatRuntime {
       params: event.params,
       requestId: event.requestId,
     });
+    this.#onApprovalsChanged?.(lease);
   }
 
   #requireApprovals(): ApprovalStore {
@@ -269,6 +277,13 @@ export class ChatRuntime {
     }
     return this.#approvals;
   }
+}
+
+function permissionConfig(preset: "auto_review" | "default" | undefined): { approvalPolicy: "on-request"; approvalsReviewer: "auto_review" | "user" } {
+  return {
+    approvalPolicy: "on-request",
+    approvalsReviewer: preset === "auto_review" ? "auto_review" : "user",
+  };
 }
 
 export class FakeAppServerRuntime extends EventEmitter implements AppServerRuntime {
