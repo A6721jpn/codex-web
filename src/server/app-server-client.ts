@@ -99,7 +99,7 @@ export class AppServerClient extends EventEmitter {
 
     await this.#request("initialize", {
       capabilities: { experimentalApi: true },
-      clientInfo: { name: "codex_web" },
+      clientInfo: { name: "codex_web", title: "codex-web", version: "0.0.0" },
     });
     if (this.state.status === "starting") {
       this.state = { pid: child.pid, startedAt, status: "ready" };

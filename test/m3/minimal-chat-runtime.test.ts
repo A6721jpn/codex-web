@@ -145,6 +145,13 @@ test("ChatRuntime builds start/resume/turn/interrupt calls from server-side work
     assert.equal(appServer.threadResumeCalls[0]?.excludeTurns, true);
     assert.equal(appServer.threadResumeCalls[0]?.history, undefined);
     assert.equal(appServer.turnStartCalls[0]?.input[0]?.type, "text");
+    assert.deepEqual(appServer.turnStartCalls[0]?.sandboxPolicy, {
+      excludeSlashTmp: false,
+      excludeTmpdirEnvVar: false,
+      networkAccess: false,
+      type: "workspaceWrite",
+      writableRoots: [workspace.canonicalPath],
+    });
     assert.equal(appServer.turnInterruptCalls[0]?.turnId, "turn-1");
   });
 });

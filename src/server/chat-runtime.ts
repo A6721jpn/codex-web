@@ -205,7 +205,13 @@ export class ChatRuntime {
       approvalsReviewer: permissions.approvalsReviewer,
       cwd: workspace.canonicalPath,
       input: [{ text: input.input, text_elements: [], type: "text" }],
-      sandboxPolicy: { mode: "workspaceWrite", networkAccess: false },
+      sandboxPolicy: {
+        excludeSlashTmp: false,
+        excludeTmpdirEnvVar: false,
+        networkAccess: false,
+        type: "workspaceWrite",
+        writableRoots: [workspace.canonicalPath],
+      },
       threadId: input.threadId,
     })) as { turn: { id?: string; status?: string } };
   }

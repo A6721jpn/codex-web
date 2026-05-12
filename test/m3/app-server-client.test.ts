@@ -69,7 +69,7 @@ test("AppServerClient starts codex app-server over stdio and sends codex_web ini
     method: "initialize",
     params: {
       capabilities: { experimentalApi: true },
-      clientInfo: { name: "codex_web" },
+      clientInfo: { name: "codex_web", title: "codex-web", version: "0.0.0" },
     },
   });
 
