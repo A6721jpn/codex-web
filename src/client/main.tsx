@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { formatActivityTime, getThreadDisplay, getWorkspaceDisplay } from "./display.ts";
 import "./styles.css";
 
 type AuthStatus = {
@@ -270,23 +271,38 @@ function App(): React.ReactElement {
     );
   }
 
+  const selectedWorkspace = workspaces.find((workspace) => workspace.id === selectedWorkspaceId) ?? workspaces[0];
+  const selectedWorkspaceDisplay = getWorkspaceDisplay(selectedWorkspace?.canonicalPath);
+  const activeThread = threads.find((thread) => thread.id === activeThreadId);
+  const activeThreadDisplay = activeThread ? getThreadDisplay(activeThread) : undefined;
+
   const history = (
     <aside className="history-drawer" data-open={drawerOpen} aria-label="Workspaces and conversation history">
-      <div className="nav-section">
-        <label>
-          Workspace
+      <div className="sidebar-brand">
+        <span className="app-mark" aria-hidden="true">C</span>
+        <span>Codex</span>
+      </div>
+      <div className="nav-section project-section">
+        <label className="project-picker" htmlFor="workspace-select">
+          <span>Project</span>
           <select
+            id="workspace-select"
             onChange={(event) => setSelectedWorkspaceId(Number(event.currentTarget.value))}
             value={selectedWorkspaceId ?? workspaces[0]?.id ?? ""}
           >
             {workspaces.map((workspace) => (
               <option key={workspace.id} value={workspace.id}>
-                {workspace.canonicalPath}
+                {getWorkspaceDisplay(workspace.canonicalPath).name} - {workspace.canonicalPath}
               </option>
             ))}
           </select>
         </label>
+        <div className="project-summary" title={selectedWorkspaceDisplay.fullPath}>
+          <strong>{selectedWorkspaceDisplay.name}</strong>
+          <small>{selectedWorkspaceDisplay.parent}</small>
+        </div>
         <form
+          className="open-path-form"
           onSubmit={(event) => {
             event.preventDefault();
             if (lease) {
@@ -303,20 +319,21 @@ function App(): React.ReactElement {
           }}
         >
           <label>
-            Open path
+            Open folder
             <input
               onChange={(event) => setWorkspacePath(event.currentTarget.value)}
               placeholder="C:\\Users\\aokuni\\Documents\\New project"
               value={workspacePath}
             />
           </label>
-          <button disabled={!lease || !workspacePath.trim()} type="submit">Open</button>
+          <button aria-label="Open folder" disabled={!lease || !workspacePath.trim()} type="submit">Open</button>
         </form>
       </div>
       <div className="nav-section">
         <div className="nav-heading">
-          <p className="eyebrow">History</p>
+          <p className="eyebrow">Threads</p>
           <button
+            aria-label="Refresh threads"
             type="button"
             onClick={() => lease && void refreshThreads({ csrfToken, lease, search: threadSearch, setError, setThreads })}
           >
@@ -350,9 +367,12 @@ function App(): React.ReactElement {
                   }
                 }}
               >
-                <span>{thread.title ?? thread.id}</span>
-                <small>{thread.sourceKind} / {thread.status}</small>
-                <small>{formatLastOpened(thread.lastOpenedAt ?? thread.updatedAt)}</small>
+                <span className="thread-row-main">
+                  <span className="thread-title">{getThreadDisplay(thread).title}</span>
+                  <small className="thread-time">{formatActivityTime(thread.lastOpenedAt ?? thread.updatedAt)}</small>
+                </span>
+                <small className="thread-project">{getWorkspaceDisplay(thread.workspacePath).name}</small>
+                <small className="thread-meta">{getThreadDisplay(thread).subtitle} / {thread.status}</small>
               </button>
             </li>
           ))}
@@ -367,13 +387,15 @@ function App(): React.ReactElement {
         {history}
         <section className="chat-pane" aria-label="Chat runtime">
           <header className="topbar">
-            <button className="drawer-toggle" type="button" onClick={() => setDrawerOpen((current) => !current)}>
-              History
+            <button className="drawer-toggle" aria-label="Toggle sidebar" type="button" onClick={() => setDrawerOpen((current) => !current)}>
+              Menu
             </button>
-            <div>
-              <p className="eyebrow">{mode}</p>
-              <h1>{activeThreadId ? threads.find((thread) => thread.id === activeThreadId)?.title ?? activeThreadId : "Conversation"}</h1>
+            <div className="topbar-title">
+              <p>{selectedWorkspaceDisplay.name}</p>
+              <h1>{activeThreadDisplay?.title ?? "New conversation"}</h1>
+              <small>{activeThreadDisplay?.subtitle ?? selectedWorkspaceDisplay.fullPath}</small>
             </div>
+            <span className="connection-pill" data-state={connectionStatus?.state ?? "available"}>{mode}</span>
           </header>
           {connectionStatus?.state === "busy" ? (
             <article className="busy-card">
@@ -482,6 +504,7 @@ function App(): React.ReactElement {
           </section>
           <section className="composer">
             <form
+              className="composer-form start-form"
               onSubmit={(event) => {
                 event.preventDefault();
                 if (lease && selectedWorkspaceId) {
@@ -501,11 +524,12 @@ function App(): React.ReactElement {
             >
               <label>
                 Start thread
-                <input onChange={(event) => setPrompt(event.currentTarget.value)} value={prompt} />
+                <textarea onChange={(event) => setPrompt(event.currentTarget.value)} rows={2} value={prompt} />
               </label>
               <button disabled={!selectedWorkspaceId || !prompt.trim()} type="submit">Start</button>
             </form>
             <form
+              className="composer-form message-form"
               onSubmit={(event) => {
                 event.preventDefault();
                 if (lease && selectedWorkspaceId && activeThreadId) {
@@ -524,7 +548,7 @@ function App(): React.ReactElement {
             >
               <label>
                 Message
-                <input onChange={(event) => setTurnInput(event.currentTarget.value)} value={turnInput} />
+                <textarea onChange={(event) => setTurnInput(event.currentTarget.value)} rows={2} value={turnInput} />
               </label>
               <div className="composer-actions">
                 <button disabled={!activeThreadId || !turnInput.trim()} type="submit">Send</button>
@@ -770,10 +794,6 @@ async function decideApproval(input: {
     return;
   }
   await refreshApprovals({ lease: input.lease, setApprovals: input.setApprovals, setError: input.setError });
-}
-
-function formatLastOpened(value?: number): string {
-  return value ? new Date(value).toLocaleString() : "No recent activity";
 }
 
 function leaseHeaders(lease: Lease): Record<string, string> {

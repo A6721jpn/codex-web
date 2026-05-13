@@ -314,6 +314,9 @@ test("responsive UI source exposes chat layout search drawer busy approval and e
   for (const marker of [
     "conversation-layout",
     "history-drawer",
+    "project-summary",
+    "thread-row-main",
+    "topbar-title",
     "thread-search",
     "busy-card",
     "error-card",
@@ -335,7 +338,7 @@ test("responsive CSS covers phone tablet and desktop without one-note palette or
   assert(css.includes("@media (min-width: 1025px)"));
   assert(css.includes("overflow-wrap: anywhere"));
   assert(!css.includes(".card .card"));
-  for (const color of ["#174f3d", "#2563eb", "#a15c16"]) {
+  for (const color of ["#111111", "#2563eb", "#a15c16"]) {
     assert(css.includes(color), color);
   }
 });
