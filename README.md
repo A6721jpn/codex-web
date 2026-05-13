@@ -28,8 +28,141 @@ The browser only talks to the codex-web server. The server owns authentication, 
 
 ## Status
 
-This repository is in the design/setup phase. The first implementation milestone is a minimal chat-centered remote client.
+This repository is in MVP implementation. M1 through M4 are implemented: security shell, SQLite/workspace/thread metadata, minimal app-server chat runtime, and minimal server-owned approval handling.
 
-The current design is documented in [docs/superpowers/specs/2026-05-11-codex-web-design.md](docs/superpowers/specs/2026-05-11-codex-web-design.md).
+For a no-context agent or new contributor, start with [docs/agent-reading-guide.md](docs/agent-reading-guide.md). It gives the read order, source ownership map, current invariants, and links to architecture decision records.
+
+The compact architecture map is [docs/architecture/overview.md](docs/architecture/overview.md). Stable design decisions are tracked in [docs/adr/README.md](docs/adr/README.md).
+
+Current milestone status is summarized in [docs/milestones.md](docs/milestones.md). Current security invariants are in [docs/security-model.md](docs/security-model.md). Development and preflight commands are in [docs/runbook.md](docs/runbook.md).
+
+The original broad design is documented in [docs/superpowers/specs/2026-05-11-codex-web-design.md](docs/superpowers/specs/2026-05-11-codex-web-design.md). Prefer the current-state docs above for orientation.
+
+M0 protocol and Windows feasibility results are documented in [docs/m0/protocol-and-windows-feasibility.md](docs/m0/protocol-and-windows-feasibility.md).
+
+M1 security baseline setup and scope are documented in [docs/m1-security-baseline.md](docs/m1-security-baseline.md).
+
+M2 SQLite, workspace policy, and thread index scope are documented in [docs/m2-sqlite-workspace-thread-index.md](docs/m2-sqlite-workspace-thread-index.md).
+
+M3 app-server client and minimal chat runtime scope are documented in [docs/m3-app-server-client-minimal-chat-runtime.md](docs/m3-app-server-client-minimal-chat-runtime.md).
+
+M4 approval UI and server-side approval handling scope are documented in [docs/m4-approval-ui-and-server-side-handling.md](docs/m4-approval-ui-and-server-side-handling.md).
+
+## M1 Development
+
+```powershell
+copy .env.example .env
+# Set CODEX_WEB_SESSION_SECRET to at least 32 random characters.
+npm install
+npm run dev
+```
+
+Validation:
+
+```powershell
+npm test
+npm run build
+```
 
 See [AGENTS.md](AGENTS.md) for project goals and development rules.
+
+## M2 Development
+
+M2 adds SQLite migration versioning, workspace metadata/policy, and a lightweight thread index. It remains metadata-only: prompts, agent messages, reasoning, command output, diffs, turn items, and raw app-server payloads are not stored in SQLite.
+
+Validation:
+
+```powershell
+npm test
+npm run build
+npm run preflight
+```
+
+## M3 Development
+
+M3 adds an allow-listed server-side app-server client and minimal chat runtime. The browser API remains semantic and does not expose raw JSON-RPC forwarding. Thread refresh uses explicit `sourceKinds: ["appServer", "cli", "vscode"]` and stores only thread metadata in SQLite.
+
+Validation:
+
+```powershell
+npm test
+npm run build
+$env:CODEX_WEB_SESSION_SECRET = "replace-with-at-least-32-characters"
+npm run preflight
+npm run dev
+```
+
+M3 intentionally defers approval UI, rich timeline rendering, terminal/file panels, custom permission editing, and Windows process-tree containment.
+
+## M4 Development
+
+M4 adds memory-only pending approval handling, redacted SQLite approval audit rows, semantic approval list/decision routes, and a minimal approval card UI. The browser still cannot call raw app-server JSON-RPC methods or submit raw method/params. Approval request bodies, command bodies, full diffs, prompts, agent messages, reasoning, command output, and raw app-server payloads are not persisted.
+
+Validation:
+
+```powershell
+npm test
+npm run build
+$env:CODEX_WEB_SESSION_SECRET = "replace-with-at-least-32-characters"
+npm run preflight
+npm run dev
+```
+
+M4 intentionally defers terminal/file tree views, custom permission editing, rich diff/command rendering, reconnect restoration of pending approvals, and detailed MCP/tool elicitation forms.
+
+## M5-M7 Development
+
+M5 adds reconnect and cross-device restoration. Same-device reloads reacquire the active lease through a semantic reconnect route, server-side UI state restores the active workspace/thread, pending approvals remain memory-only, stale epochs are rejected, and `thread/unsubscribe` is exposed only as a semantic API.
+
+M6 adds the chat-centered responsive UI:
+
+- Desktop: left navigation plus center conversation.
+- iPad: split layout.
+- Phone: conversation-first view with a history drawer.
+- Thread search, display names, last opened metadata, busy/takeover state, approval cards, and error cards.
+
+M7 adds operational docs, security headers, safer cache policy, preflight redaction hardening, and server-side E2E smoke coverage. See [docs/m7-ops-hardening.md](docs/m7-ops-hardening.md).
+
+## Usage
+
+Install and configure:
+
+```powershell
+npm install
+copy .env.example .env
+# Set CODEX_WEB_SESSION_SECRET to at least 32 random characters.
+```
+
+Run development:
+
+```powershell
+npm run dev
+```
+
+Build and start production:
+
+```powershell
+npm run build
+npm start
+```
+
+Validate:
+
+```powershell
+npm test
+npm run build
+$env:CODEX_WEB_SESSION_SECRET = "replace-with-at-least-32-characters"
+npm run preflight
+```
+
+## Windows And VPN Notes
+
+Prefer loopback binding for local development. For phone, iPad, or Mac access, bind to the VPN interface and scope Windows Firewall to the VPN subnet only. Use HTTPS/WSS through a reverse proxy or VPN TLS layer and set `CODEX_WEB_PUBLIC_ORIGIN` to that HTTPS origin.
+
+Back up the SQLite DB and `.env` before upgrade. Restore by stopping codex-web, replacing the DB, restoring `.env`, then running `npm run preflight`. Regenerate app-server schemas when changing Codex CLI/app-server versions; the current compatibility note is based on `codex-cli 0.130.0-alpha.5`.
+
+If preflight or shell execution reports Error 1385, inspect `%USERPROFILE%\.codex\sandbox.log` and `%USERPROFILE%\.codex\setup_error.json`. Process-tree containment is not complete yet; Windows Job Object or `taskkill /T` cleanup remains deferred.
+
+## Deferred
+
+Terminal view, file tree, custom permission editor, rich diff/terminal rendering, persistent raw payload capture, multi-user support, service installation, and full Windows process-tree containment are deferred.

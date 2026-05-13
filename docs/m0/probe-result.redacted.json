@@ -1,0 +1,216 @@
+{
+  "codexBin": "codex",
+  "startedAt": "2026-05-11T08:08:25.932Z",
+  "pid": 47476,
+  "steps": [
+    {
+      "elapsedMs": 349,
+      "method": "initialize",
+      "ok": true,
+      "resultSummary": {
+        "keys": [
+          "userAgent",
+          "codexHome",
+          "platformFamily",
+          "platformOs"
+        ]
+      }
+    },
+    {
+      "elapsedMs": 356,
+      "method": "model/list",
+      "ok": true,
+      "resultSummary": {
+        "keys": [
+          "data",
+          "nextCursor"
+        ]
+      }
+    },
+    {
+      "elapsedMs": 855,
+      "method": "thread/list",
+      "ok": true,
+      "resultSummary": {
+        "keys": [
+          "data",
+          "nextCursor",
+          "backwardsCursor"
+        ]
+      }
+    },
+    {
+      "elapsedMs": 860,
+      "method": "windowsSandbox/readiness",
+      "ok": true,
+      "resultSummary": {
+        "keys": [
+          "status"
+        ],
+        "status": "ready"
+      }
+    },
+    {
+      "elapsedMs": 5827,
+      "method": "thread/start",
+      "ok": true,
+      "resultSummary": {
+        "keys": [
+          "thread",
+          "model",
+          "modelProvider",
+          "serviceTier",
+          "cwd",
+          "instructionSources",
+          "approvalPolicy",
+          "approvalsReviewer",
+          "sandbox",
+          "permissionProfile",
+          "activePermissionProfile",
+          "reasoningEffort"
+        ],
+        "model": "gpt-5.5",
+        "approvalPolicy": "on-request",
+        "approvalsReviewer": "user",
+        "threadId": "019e1614-9fd4-7313-a44b-28b7db28f8a6"
+      }
+    },
+    {
+      "elapsedMs": 6328,
+      "method": "turn/start",
+      "ok": true,
+      "resultSummary": {
+        "keys": [
+          "turn"
+        ],
+        "turnId": "019e1614-a504-7490-9eeb-63bc5a48e796",
+        "turnStatus": "inProgress"
+      }
+    },
+    {
+      "elapsedMs": 14510,
+      "method": "turn/interrupt",
+      "ok": true,
+      "resultSummary": {
+        "keys": []
+      }
+    },
+    {
+      "elapsedMs": 14642,
+      "method": "thread/resume",
+      "ok": true,
+      "resultSummary": {
+        "keys": [
+          "thread",
+          "model",
+          "modelProvider",
+          "serviceTier",
+          "cwd",
+          "instructionSources",
+          "approvalPolicy",
+          "approvalsReviewer",
+          "sandbox",
+          "permissionProfile",
+          "activePermissionProfile",
+          "reasoningEffort"
+        ],
+        "model": "gpt-5.5",
+        "approvalPolicy": "on-request",
+        "approvalsReviewer": "user",
+        "threadId": "019e1614-9fd4-7313-a44b-28b7db28f8a6"
+      }
+    }
+  ],
+  "notifications": [
+    {
+      "keys": [
+        "method",
+        "params"
+      ],
+      "method": "remoteControl/status/changed"
+    },
+    {
+      "keys": [
+        "method",
+        "params"
+      ],
+      "method": "thread/started"
+    },
+    {
+      "keys": [
+        "method",
+        "params"
+      ],
+      "method": "warning"
+    },
+    {
+      "keys": [
+        "method",
+        "params"
+      ],
+      "method": "mcpServer/startupStatus/updated"
+    },
+    {
+      "keys": [
+        "method",
+        "params"
+      ],
+      "method": "mcpServer/startupStatus/updated"
+    },
+    {
+      "keys": [
+        "method",
+        "params"
+      ],
+      "method": "mcpServer/startupStatus/updated"
+    },
+    {
+      "keys": [
+        "method",
+        "params"
+      ],
+      "method": "thread/status/changed"
+    },
+    {
+      "keys": [
+        "method",
+        "params"
+      ],
+      "method": "turn/started"
+    },
+    {
+      "keys": [
+        "method",
+        "params"
+      ],
+      "method": "mcpServer/startupStatus/updated"
+    },
+    {
+      "keys": [
+        "method",
+        "params"
+      ],
+      "method": "thread/status/changed"
+    },
+    {
+      "keys": [
+        "method",
+        "params"
+      ],
+      "method": "turn/completed"
+    }
+  ],
+  "stderrSummary": [
+    "{\"timestamp\":\"2026-05-11T08:08:26.497139Z\",\"level\":\"WARN\",\"fields\":{\"message\":\"startup remote plugin sync failed; will retry on next app-server start\",\"error\":\"remote plugin sync request to https://chatgpt.com/backend-api/plugins/list failed with status 403 Forbidden: <body redacted>",
+    "{\"timestamp\":\"2026-05-11T08:08:26.499164Z\",\"level\":\"WARN\",\"fields\":{\"message\":\"failed to warm featured plugin ids cache\",\"error\":\"remote plugin sync request to https://chatgpt.com/backend-api/plugins/featured failed with status 403 Forbidden: <body redacted>",
+    "{\"timestamp\":\"2026-05-11T08:08:26.806721Z\",\"level\":\"WARN\",\"fields\":{\"message\":\"unknown feature key in config: powershell_utf8\"},\"target\":\"codex_features\"}",
+    "{\"timestamp\":\"2026-05-11T08:08:26.806839Z\",\"level\":\"WARN\",\"fields\":{\"message\":\"unknown feature key in config: remote_compaction\"},\"target\":\"codex_features\"}",
+    "{\"timestamp\":\"2026-05-11T08:08:26.806854Z\",\"level\":\"WARN\",\"fields\":{\"message\":\"unknown feature key in config: windows_wsl_setup_acknowledged\"},\"target\":\"codex_features\"}",
+    "{\"timestamp\":\"2026-05-11T08:08:28.486724Z\",\"level\":\"WARN\",\"fields\":{\"message\":\"ignoring interface.defaultPrompt: prompt must be at most 128 characters\",\"path\":\"<USER_HOME_ESCAPED>\\\\.codex\\\\.tmp\\\\plugins\\\\plugins\\\\build-ios-apps\\\\.codex-plugin/plugin.json\"},\"target\":\"codex_core_plugins::manifest\"}",
+    "{\"timestamp\":\"2026-05-11T08:08:28.594884Z\",\"level\":\"WARN\",\"fields\":{\"message\":\"ignoring interface.defaultPrompt: maximum of 3 prompts is supported\",\"path\":\"<USER_HOME_ESCAPED>\\\\.codex\\\\.tmp\\\\plugins\\\\plugins\\\\plugin-eval\\\\.codex-plugin/plugin.json\"},\"target\":\"codex_core_plugins::manifest\"}",
+    "{\"timestamp\":\"2026-05-11T08:08:29.070503Z\",\"level\":\"WARN\",\"fields\":{\"message\":\"ignoring interface.defaultPrompt: maximum of 3 prompts is supported\",\"path\":\"<USER_HOME_ESCAPED>\\\\.codex\\\\.tmp\\\\plugins\\\\plugins\\\\twilio-developer-kit\\\\.codex-plugin/plugin.json\"},\"target\":\"codex_core_plugins::manifest\"}",
+    "{\"timestamp\":\"2026-05-11T08:08:29.074861Z\",\"level\":\"WARN\",\"fields\":{\"message\":\"ignoring interface.defaultPrompt: maximum of 3 prompts is supported\",\"path\":\"<USER_HOME_ESCAPED>\\\\.codex\\\\.tmp\\\\plugins\\\\plugins\\\\openai-developers\\\\.codex-plugin/plugin.json\"},\"target\":\"codex_core_plugins::manifest\"}",
+    "{\"timestamp\":\"2026-05-11T08:08:31.342008Z\",\"level\":\"WARN\",\"fields\":{\"message\":\"Failed to create shell snapshot for powershell: Shell snapshot not supported yet for PowerShell\"},\"target\":\"codex_core::shell_snapshot\"}",
+    "{\"timestamp\":\"2026-05-11T08:08:35.436452Z\",\"level\":\"WARN\",\"fields\":{\"message\":\"task 019e1614-a504-7490-9eeb-63bc5a48e796 didn't complete gracefully after 100ms\"},\"target\":\"codex_core::tasks\"}"
+  ]
+}

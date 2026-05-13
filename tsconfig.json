@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
+    "jsx": "react-jsx",
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "noEmit": true,
+    "strict": true,
+    "target": "ES2024"
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "test/**/*.ts"]
+}
